@@ -1,14 +1,19 @@
 package com.genymobile.scrcpy.video;
 
+import android.content.res.Configuration;
+import android.graphics.Rect;
+
 import com.genymobile.scrcpy.device.DisplayInfo;
 import com.genymobile.scrcpy.device.Size;
 import com.genymobile.scrcpy.util.Ln;
+import com.genymobile.scrcpy.util.FieldHelper;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
 
 public abstract class DisplayCapture extends SurfaceCapture {
 
     // Source display size (before resizing/crop) for the current session
     private Size sessionDisplaySize;
+    private int sessionRotation;
 
     private synchronized Size getSessionDisplaySize() {
         return sessionDisplaySize;
@@ -18,7 +23,38 @@ public abstract class DisplayCapture extends SurfaceCapture {
         this.sessionDisplaySize = sessionDisplaySize;
     }
 
+    private synchronized int getSessionRotation() {
+        return sessionRotation;
+    }
+
+    protected synchronized void setSessionRotation(int sessionRotation) {
+        this.sessionRotation = sessionRotation;
+    }
+
+    protected void handleDisplayConfigurationChanged(Configuration newConfig) {
+        Ln.d("DisplayCapture: handleDisplayConfigurationChanged using WindowManager");
+        Object windowConfiguration = FieldHelper.getField(newConfig,"windowConfiguration");
+
+        assert windowConfiguration != null;
+        Integer mDisplayRotation = (Integer) FieldHelper.getField(windowConfiguration, "mDisplayRotation");
+        Ln.d("mDisplayRotation="+mDisplayRotation);
+
+        if (mDisplayRotation != getSessionRotation()) {
+            setSessionRotation(mDisplayRotation);
+            invalidate();
+        }
+
+        /*
+         * FEATURE REQUEST: resizeable vd. when scrcpy window resizes, pass new size to server
+         * and let it handle the resize (wm size WxH -d ID). base dpi should be 160, but take into
+         * account the scale of mirroring device.
+         */
+        Rect mBounds = (Rect) FieldHelper.getField(windowConfiguration, "mBounds");
+        Ln.d("mBounds="+mBounds.flattenToString());
+    }
+
     protected void handleDisplayChanged(int displayId) {
+        Ln.d("DisplayCapture: handleDisplayChanged using DisplayManager");
         DisplayInfo di = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
         if (di == null) {
             Ln.w("DisplayInfo for " + displayId + " cannot be retrieved");

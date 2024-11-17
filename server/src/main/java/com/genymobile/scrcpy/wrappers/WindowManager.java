@@ -6,6 +6,7 @@ import com.genymobile.scrcpy.util.Ln;
 import android.annotation.TargetApi;
 import android.os.IInterface;
 import android.view.IDisplayFoldListener;
+import android.view.IDisplayWindowListener;
 import android.view.IRotationWatcher;
 
 import java.lang.reflect.Method;
@@ -224,6 +225,23 @@ public final class WindowManager {
             manager.getClass().getMethod("unregisterDisplayFoldListener", IDisplayFoldListener.class).invoke(manager, foldListener);
         } catch (Exception e) {
             Ln.e("Could not unregister display fold listener", e);
+        }
+    }
+
+    public int[] registerDisplayWindowListener(android.view.IDisplayWindowListener listener) {
+        try {
+            return (int[]) manager.getClass().getMethod("registerDisplayWindowListener", android.view.IDisplayWindowListener.class).invoke(manager, listener);
+        } catch (Exception e) {
+            Ln.e("Could not unregister display window listener", e);
+        }
+        return null;
+    }
+
+    public void unregisterDisplayWindowListener(android.view.IDisplayWindowListener listener) {
+        try {
+            manager.getClass().getMethod("unregisterDisplayWindowListener", IDisplayWindowListener.class).invoke(manager, listener);
+        } catch (Exception e) {
+            Ln.e("Could not unregister display window listener", e);
         }
     }
 }

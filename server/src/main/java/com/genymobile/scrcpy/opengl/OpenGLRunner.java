@@ -139,6 +139,7 @@ public final class OpenGLRunner {
         int[] numConfigs = new int[1];
         EGL14.eglChooseConfig(eglDisplay, attribList, 0, configs, 0, configs.length, numConfigs, 0);
         if (numConfigs[0] <= 0) {
+            EGL14.eglTerminate(eglDisplay);
             throw new OpenGLException("Unable to find ES2 EGL config");
         }
         EGLConfig eglConfig = configs[0];
@@ -158,10 +159,15 @@ public final class OpenGLRunner {
         };
         eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, outputSurface, surfaceAttribList, 0);
         if (eglSurface == null) {
+            EGL14.eglDestroyContext(eglDisplay, eglContext);
+            EGL14.eglTerminate(eglDisplay);
             throw new OpenGLException("Failed to create EGL window surface");
         }
 
         if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            EGL14.eglDestroySurface(eglDisplay, eglSurface);
+            EGL14.eglDestroyContext(eglDisplay, eglContext);
+            EGL14.eglTerminate(eglDisplay);
             throw new OpenGLException("Failed to make EGL context current");
         }
 

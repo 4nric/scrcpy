@@ -136,6 +136,7 @@ scrcpy --capture-orientation=@flip0    # locked to hflip
 scrcpy --capture-orientation=@flip90   # locked to hflip + 90° clockwise
 scrcpy --capture-orientation=@flip180  # locked to hflip + 180°
 scrcpy --capture-orientation=@flip270  # locked to hflip + 270° clockwise
+```
 
 To orient the video (on the rendering side):
 
@@ -160,7 +161,7 @@ values are allowed when recording.
 
 ## Angle
 
-To rotate the video content by a custom angle (in degrees, counter-clockwise):
+To rotate the video content by a custom angle (in degrees, clockwise):
 
 ```
 scrcpy --angle=23

@@ -14,23 +14,18 @@ import com.genymobile.scrcpy.opengl.OpenGLRunner;
 import com.genymobile.scrcpy.util.AffineMatrix;
 import com.genymobile.scrcpy.util.Ln;
 import com.genymobile.scrcpy.util.LogUtils;
-import com.genymobile.scrcpy.wrappers.DisplayManager;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
 import com.genymobile.scrcpy.wrappers.SurfaceControl;
 
 import android.graphics.Rect;
 import android.hardware.display.VirtualDisplay;
 import android.os.Build;
-import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.IBinder;
-import android.view.IDisplayFoldListener;
-import android.view.IRotationWatcher;
 import android.view.Surface;
 
 import java.io.IOException;
 
-public class ScreenCapture extends DisplayCapture {
+public class ScreenCapture extends SurfaceCapture {
 
     private final VirtualDisplayListener vdListener;
     private final int displayId;
@@ -43,21 +38,13 @@ public class ScreenCapture extends DisplayCapture {
     private DisplayInfo displayInfo;
     private Size videoSize;
 
+    private final DisplaySizeMonitor displaySizeMonitor = new DisplaySizeMonitor();
+
     private IBinder display;
     private VirtualDisplay virtualDisplay;
 
     private AffineMatrix transform;
     private OpenGLRunner glRunner;
-
-    private DisplayManager.DisplayListenerHandle displayListenerHandle;
-    private HandlerThread handlerThread;
-
-    // On Android 14, the DisplayListener may be broken (it never sends events). This is fixed in recent Android 14 upgrades, but we can't really
-    // detect it directly, so register a RotationWatcher and a DisplayFoldListener as a fallback, until we receive the first event from
-    // DisplayListener (which proves that it works).
-    private boolean displayListenerWorks; // only accessed from the display listener thread
-    private IRotationWatcher rotationWatcher;
-    private IDisplayFoldListener displayFoldListener;
 
     public ScreenCapture(VirtualDisplayListener vdListener, Options options) {
         this.vdListener = vdListener;
@@ -74,28 +61,7 @@ public class ScreenCapture extends DisplayCapture {
 
     @Override
     public void init() {
-        if (Build.VERSION.SDK_INT == AndroidVersions.API_34_ANDROID_14) {
-            registerDisplayListenerFallbacks();
-        }
-
-        handlerThread = new HandlerThread("DisplayListener");
-        handlerThread.start();
-        Handler handler = new Handler(handlerThread.getLooper());
-        displayListenerHandle = ServiceManager.getDisplayManager().registerDisplayListener(displayId -> {
-            if (Ln.isEnabled(Ln.Level.VERBOSE)) {
-                Ln.v("ScreenCapture: onDisplayChanged(" + displayId + ")");
-            }
-            if (Build.VERSION.SDK_INT == AndroidVersions.API_34_ANDROID_14) {
-                if (!displayListenerWorks) {
-                    // On the first display listener event, we know it works, we can unregister the fallbacks
-                    displayListenerWorks = true;
-                    unregisterDisplayListenerFallbacks();
-                }
-            }
-            if (this.displayId == displayId) {
-                handleDisplayChanged(displayId);
-            }
-        }, handler);
+        displaySizeMonitor.start(displayId, this::invalidate);
     }
 
     @Override
@@ -111,7 +77,7 @@ public class ScreenCapture extends DisplayCapture {
         }
 
         Size displaySize = displayInfo.getSize();
-        setSessionDisplaySize(displaySize);
+        displaySizeMonitor.setSessionDisplaySize(displaySize);
 
         if (captureOrientationLock == Orientation.Lock.LockedInitial) {
             // The user requested to lock the video orientation to the current orientation
@@ -136,6 +102,15 @@ public class ScreenCapture extends DisplayCapture {
 
     @Override
     public void start(Surface surface) throws IOException {
+        if (display != null) {
+            SurfaceControl.destroyDisplay(display);
+            display = null;
+        }
+        if (virtualDisplay != null) {
+            virtualDisplay.release();
+            virtualDisplay = null;
+        }
+
         Size inputSize;
         if (transform != null) {
             // If there is a filter, it must receive the full display content
@@ -152,13 +127,8 @@ public class ScreenCapture extends DisplayCapture {
         int virtualDisplayId;
         PositionMapper positionMapper;
         try {
-            if (virtualDisplay == null) {
-                virtualDisplay = ServiceManager.getDisplayManager()
-                        .createVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayId, surface);
-            } else {
-                virtualDisplay.setSurface(surface);
-                virtualDisplay.resize(inputSize.getWidth(), inputSize.getHeight(), displayInfo.getDpi());
-            }
+            virtualDisplay = ServiceManager.getDisplayManager()
+                    .createVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayId, surface);
             virtualDisplayId = virtualDisplay.getDisplay().getDisplayId();
 
             // The positions are relative to the virtual display, not the original display (so use inputSize, not deviceSize!)
@@ -166,9 +136,7 @@ public class ScreenCapture extends DisplayCapture {
             Ln.d("Display: using DisplayManager API");
         } catch (Exception displayManagerException) {
             try {
-                if (display == null) {
-                    display = createDisplay();
-                }
+                display = createDisplay();
 
                 Size deviceSize = displayInfo.getSize();
                 int layerStack = displayInfo.getLayerStack();
@@ -200,18 +168,7 @@ public class ScreenCapture extends DisplayCapture {
 
     @Override
     public void release() {
-        if (Build.VERSION.SDK_INT == AndroidVersions.API_34_ANDROID_14) {
-            unregisterDisplayListenerFallbacks();
-        }
-
-        handlerThread.quitSafely();
-        handlerThread = null;
-
-        // displayListenerHandle may be null if registration failed
-        if (displayListenerHandle != null) {
-            ServiceManager.getDisplayManager().unregisterDisplayListener(displayListenerHandle);
-            displayListenerHandle = null;
-        }
+        displaySizeMonitor.stopAndRelease();
 
         if (display != null) {
             SurfaceControl.destroyDisplay(display);
@@ -250,59 +207,6 @@ public class ScreenCapture extends DisplayCapture {
             SurfaceControl.setDisplayLayerStack(display, layerStack);
         } finally {
             SurfaceControl.closeTransaction();
-        }
-    }
-
-    private void registerDisplayListenerFallbacks() {
-        rotationWatcher = new IRotationWatcher.Stub() {
-            @Override
-            public void onRotationChanged(int rotation) {
-                if (Ln.isEnabled(Ln.Level.VERBOSE)) {
-                    Ln.v("ScreenCapture: onRotationChanged(" + rotation + ")");
-                }
-                invalidate();
-            }
-        };
-        ServiceManager.getWindowManager().registerRotationWatcher(rotationWatcher, displayId);
-
-        // Build.VERSION.SDK_INT >= AndroidVersions.API_29_ANDROID_10 (but implied by == API_34_ANDROID 14)
-        displayFoldListener = new IDisplayFoldListener.Stub() {
-
-            private boolean first = true;
-
-            @Override
-            public void onDisplayFoldChanged(int displayId, boolean folded) {
-                if (first) {
-                    // An event is posted on registration to signal the initial state. Ignore it to avoid restarting encoding.
-                    first = false;
-                    return;
-                }
-
-                if (Ln.isEnabled(Ln.Level.VERBOSE)) {
-                    Ln.v("ScreenCapture: onDisplayFoldChanged(" + displayId + ", " + folded + ")");
-                }
-
-                if (ScreenCapture.this.displayId != displayId) {
-                    // Ignore events related to other display ids
-                    return;
-                }
-                invalidate();
-            }
-        };
-        ServiceManager.getWindowManager().registerDisplayFoldListener(displayFoldListener);
-    }
-
-    private void unregisterDisplayListenerFallbacks() {
-        synchronized (this) {
-            if (rotationWatcher != null) {
-                ServiceManager.getWindowManager().unregisterRotationWatcher(rotationWatcher);
-                rotationWatcher = null;
-            }
-            if (displayFoldListener != null) {
-                // Build.VERSION.SDK_INT >= AndroidVersions.API_29_ANDROID_10 (but implied by == API_34_ANDROID 14)
-                ServiceManager.getWindowManager().unregisterDisplayFoldListener(displayFoldListener);
-                displayFoldListener = null;
-            }
         }
     }
 

@@ -12,14 +12,13 @@ import com.genymobile.scrcpy.opengl.OpenGLFilter;
 import com.genymobile.scrcpy.opengl.OpenGLRunner;
 import com.genymobile.scrcpy.util.AffineMatrix;
 import com.genymobile.scrcpy.util.Ln;
-import com.genymobile.scrcpy.wrappers.DisplayManager;
+import com.genymobile.scrcpy.wrappers.IDisplayWindowListener;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
 
+import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.hardware.display.VirtualDisplay;
 import android.os.Build;
-import android.os.Handler;
-import android.os.HandlerThread;
 import android.view.Surface;
 
 import java.io.IOException;
@@ -43,8 +42,9 @@ public class NewDisplayCapture extends DisplayCapture {
     private final VirtualDisplayListener vdListener;
     private final NewDisplay newDisplay;
 
-    private DisplayManager.DisplayListenerHandle displayListenerHandle;
-    private HandlerThread handlerThread;
+    //private DisplayManager.DisplayListenerHandle displayListenerHandle;
+    //private HandlerThread handlerThread;
+    private IDisplayWindowListener displayWindowListener;
 
     private AffineMatrix displayTransform;
     private AffineMatrix eventTransform;
@@ -111,8 +111,9 @@ public class NewDisplayCapture extends DisplayCapture {
 
             videoSize = displaySize;
             displayRotation = 0;
-            // Set the current display size to avoid an unnecessary call to invalidate()
+            // Set the current display size and rotation to avoid an unnecessary call to invalidate()
             setSessionDisplaySize(displaySize);
+            setSessionRotation(displayRotation);
         } else {
             DisplayInfo displayInfo = ServiceManager.getDisplayManager().getDisplayInfo(virtualDisplay.getDisplay().getDisplayId());
             displaySize = displayInfo.getSize();
@@ -156,7 +157,6 @@ public class NewDisplayCapture extends DisplayCapture {
     }
 
     public void startNew(Surface surface) {
-        int virtualDisplayId;
         try {
             int flags = VIRTUAL_DISPLAY_FLAG_PUBLIC
                     | VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
@@ -174,22 +174,30 @@ public class NewDisplayCapture extends DisplayCapture {
                             | VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP;
                 }
             }
+
+            displayWindowListener = new IDisplayWindowListener(){
+                @Override
+                public void onDisplayAdded(int displayId) {
+                    Ln.d("NewDisplayCapture: onDisplayAdded(" + displayId + ")");
+                    if (virtualDisplay.getDisplay().getDisplayId() == displayId){
+                        Ln.i("New display: " + displaySize.getWidth() + "x" + displaySize.getHeight() + "/" + dpi + " (id=" + displayId + ")");
+                    }
+                }
+
+                @Override
+                public void onDisplayConfigurationChanged(int displayId, Configuration newConfig) {
+                    if (displayId != virtualDisplay.getDisplay().getDisplayId()) {
+                        //Ignore configuration changes of other displays
+                        return;
+                    }
+                    Ln.d("NewDisplayCapture: onDisplayConfigurationChanged(" + displayId + ","+newConfig.toString()+")");
+
+                    handleDisplayConfigurationChanged(newConfig);
+                }
+            };
+            ServiceManager.getWindowManager().registerDisplayWindowListener(displayWindowListener);
             virtualDisplay = ServiceManager.getDisplayManager()
                     .createNewVirtualDisplay("scrcpy", displaySize.getWidth(), displaySize.getHeight(), dpi, surface, flags);
-            virtualDisplayId = virtualDisplay.getDisplay().getDisplayId();
-            Ln.i("New display: " + displaySize.getWidth() + "x" + displaySize.getHeight() + "/" + dpi + " (id=" + virtualDisplayId + ")");
-
-            handlerThread = new HandlerThread("DisplayListener");
-            handlerThread.start();
-            Handler handler = new Handler(handlerThread.getLooper());
-            displayListenerHandle = ServiceManager.getDisplayManager().registerDisplayListener(displayId -> {
-                if (Ln.isEnabled(Ln.Level.VERBOSE)) {
-                    Ln.v("NewDisplayCapture: onDisplayChanged(" + displayId + ")");
-                }
-                if (displayId == virtualDisplayId) {
-                    handleDisplayChanged(displayId);
-                }
-            }, handler);
 
         } catch (Exception e) {
             Ln.e("Could not create display", e);
@@ -228,13 +236,9 @@ public class NewDisplayCapture extends DisplayCapture {
 
     @Override
     public void release() {
-        handlerThread.quitSafely();
-        handlerThread = null;
-
-        // displayListenerHandle may be null if registration failed
-        if (displayListenerHandle != null) {
-            ServiceManager.getDisplayManager().unregisterDisplayListener(displayListenerHandle);
-            displayListenerHandle = null;
+        if (displayWindowListener != null) {
+            ServiceManager.getWindowManager().unregisterDisplayWindowListener(displayWindowListener);
+            displayWindowListener = null;
         }
 
         if (virtualDisplay != null) {

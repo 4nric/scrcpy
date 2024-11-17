@@ -478,7 +478,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         if (point == null) {
             Size eventSize = position.getScreenSize();
             Size currentSize = displayData.positionMapper.getVideoSize();
-            Ln.w("Ignore scroll event generated for size " + eventSize + " (current size is " + currentSize + ")");
+            if (Ln.isEnabled(Ln.Level.VERBOSE)) {
+                Ln.v("Ignore scroll event generated for size " + eventSize + " (current size is " + currentSize + ")");
+            }
             return false;
         }
 

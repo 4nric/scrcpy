@@ -6,6 +6,7 @@ import com.genymobile.scrcpy.util.Ln;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
+import android.app.IProcessObserver;
 import android.content.IContentProvider;
 import android.content.Intent;
 import android.os.Binder;
@@ -158,6 +159,24 @@ public final class ActivityManager {
         try {
             Method method = getForceStopPackageMethod();
             method.invoke(manager, packageName, /* userId */ /* UserHandle.USER_CURRENT */ -2);
+        } catch (Throwable e) {
+            Ln.e("Could not invoke method", e);
+        }
+    }
+
+    public void registerProcessObserver(IProcessObserver observer){
+        try {
+            IInterface am = ServiceManager.getService("activity", "android.app.IActivityManager");
+            am.getClass().getMethod("registerProcessObserver", IProcessObserver.class).invoke(am, observer);
+        } catch (Throwable e) {
+            Ln.e("Could not invoke method", e);
+        }
+    }
+
+    public void unregisterProcessObserver(IProcessObserver observer){
+        try {
+            IInterface am = ServiceManager.getService("activity", "android.app.IActivityManager");
+            am.getClass().getMethod("unregisterProcessObserver", IProcessObserver.class).invoke(am, observer);
         } catch (Throwable e) {
             Ln.e("Could not invoke method", e);
         }

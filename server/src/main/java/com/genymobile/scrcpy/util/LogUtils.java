@@ -1,17 +1,21 @@
 package com.genymobile.scrcpy.util;
 
 import com.genymobile.scrcpy.AndroidVersions;
+import com.genymobile.scrcpy.FakeContext;
 import com.genymobile.scrcpy.audio.AudioCodec;
 import com.genymobile.scrcpy.device.Device;
-import com.genymobile.scrcpy.device.DeviceApp;
 import com.genymobile.scrcpy.device.DisplayInfo;
 import com.genymobile.scrcpy.device.Size;
 import com.genymobile.scrcpy.video.VideoCodec;
 import com.genymobile.scrcpy.wrappers.DisplayManager;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
 
-import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
+import android.content.Context;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
@@ -23,10 +27,12 @@ import android.media.MediaCodecList;
 import android.os.Build;
 import android.util.Range;
 
-import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Objects;
+import java.util.Map;
 import java.util.SortedSet;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 public final class LogUtils {
@@ -189,56 +195,45 @@ public final class LogUtils {
         return set;
     }
 
-
     public static String buildAppListMessage() {
-        List<DeviceApp> apps = Device.listApps();
-        return buildAppListMessage("List of apps:", apps);
+        List<ApplicationInfo> installedApps = Device.getInstalledApps();
+        PackageManager pm = FakeContext.get().getPackageManager();
+        return buildAppListMessage("List of apps:", installedApps, pm);
     }
 
-    @SuppressLint("QueryPermissionsNeeded")
-    public static String buildAppListMessage(String title, List<DeviceApp> apps) {
-        StringBuilder builder = new StringBuilder(title);
+    public static String buildAppListMessage(String title, List<ApplicationInfo> applicationInfoList, PackageManager pm) {
+        Map<String, String> appMap = new HashMap<>();
+        Context context = FakeContext.get();
 
-        // Sort by:
-        //  1. system flag (system apps are before non-system apps)
-        //  2. name
-        //  3. package name
-        // Comparator.comparing() was introduced in API 24, so it cannot be used here to simplify the code
-        Collections.sort(apps, (thisApp, otherApp) -> {
-            // System apps first
-            int cmp = -Boolean.compare(thisApp.isSystem(), otherApp.isSystem());
-            if (cmp != 0) {
-                return cmp;
+        for (ApplicationInfo appInfo : applicationInfoList){
+            appMap.put(appInfo.packageName, appInfo.loadLabel(context.getPackageManager()).toString());
+        }
+
+        TreeMap<String, String> sortedMap = new TreeMap<>(new Comparator<String>() {
+            @Override
+            public int compare(String key1, String key2) {
+                int labelComparison = appMap.get(key1).compareToIgnoreCase(appMap.get(key2));
+                if (labelComparison != 0) {
+                    return labelComparison;
+                }
+                return key1.compareTo(key2); // Compare by package name if labels are the same
             }
-
-            cmp = Objects.compare(thisApp.getName(), otherApp.getName(), String::compareTo);
-            if (cmp != 0) {
-                return cmp;
-            }
-
-            return Objects.compare(thisApp.getPackageName(), otherApp.getPackageName(), String::compareTo);
         });
+        sortedMap.putAll(appMap);
 
+        StringBuilder builder = new StringBuilder(title);
         final int column = 30;
-        for (DeviceApp app : apps) {
-            String name = app.getName();
-            int padding = column - name.length();
-            builder.append("\n ");
-            if (app.isSystem()) {
-                builder.append("* ");
-            } else {
-                builder.append("- ");
-
-            }
-            builder.append(name);
+        for (Map.Entry<String, String> entry : sortedMap.entrySet()) {
+            int padding = column - entry.getValue().length();
+            builder.append("\n - ");
+            builder.append(entry.getValue());
             if (padding > 0) {
                 builder.append(String.format("%" + padding + "s", " "));
             } else {
-                builder.append("\n   ").append(String.format("%" + column + "s", " "));
+                builder.append("\n   - ").append(String.format("%" + column + "s", " "));
             }
-            builder.append(" ").append(app.getPackageName());
+            builder.append(" ").append(entry.getKey());
         }
-
         return builder.toString();
     }
 }

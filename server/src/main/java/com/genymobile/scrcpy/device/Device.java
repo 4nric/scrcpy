@@ -12,6 +12,7 @@ import com.genymobile.scrcpy.wrappers.SurfaceControl;
 import com.genymobile.scrcpy.wrappers.WindowManager;
 
 import android.annotation.SuppressLint;
+import android.content.Context;
 import android.content.Intent;
 import android.app.ActivityOptions;
 import android.content.pm.ApplicationInfo;
@@ -27,7 +28,6 @@ import android.view.KeyEvent;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 public final class Device {
 
@@ -221,84 +221,7 @@ public final class Device {
         return displayInfo.getRotation();
     }
 
-    public static List<DeviceApp> listApps() {
-        List<DeviceApp> apps = new ArrayList<>();
-        PackageManager pm = FakeContext.get().getPackageManager();
-        for (ApplicationInfo appInfo : getLaunchableApps(pm)) {
-            apps.add(toApp(pm, appInfo));
-        }
-
-        return apps;
-    }
-
-    @SuppressLint("QueryPermissionsNeeded")
-    private static List<ApplicationInfo> getLaunchableApps(PackageManager pm) {
-        List<ApplicationInfo> result = new ArrayList<>();
-        for (ApplicationInfo appInfo : pm.getInstalledApplications(PackageManager.GET_META_DATA)) {
-            if (appInfo.enabled && getLaunchIntent(pm, appInfo.packageName) != null) {
-                result.add(appInfo);
-            }
-        }
-
-        return result;
-    }
-
-    public static Intent getLaunchIntent(PackageManager pm, String packageName) {
-        Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
-        if (launchIntent != null) {
-            return launchIntent;
-        }
-
-        return pm.getLeanbackLaunchIntentForPackage(packageName);
-    }
-
-    private static DeviceApp toApp(PackageManager pm, ApplicationInfo appInfo) {
-        String name = pm.getApplicationLabel(appInfo).toString();
-        boolean system = (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
-        return new DeviceApp(appInfo.packageName, name, system);
-    }
-
-    @SuppressLint("QueryPermissionsNeeded")
-    public static DeviceApp findByPackageName(String packageName) {
-        PackageManager pm = FakeContext.get().getPackageManager();
-        // No need to filter by "launchable" apps, an error will be reported on start if the app is not launchable
-        for (ApplicationInfo appInfo : pm.getInstalledApplications(PackageManager.GET_META_DATA)) {
-            if (packageName.equals(appInfo.packageName)) {
-                return toApp(pm, appInfo);
-            }
-        }
-
-        return null;
-    }
-
-    @SuppressLint("QueryPermissionsNeeded")
-    public static List<DeviceApp> findByName(String searchName) {
-        List<DeviceApp> result = new ArrayList<>();
-        searchName = searchName.toLowerCase(Locale.getDefault());
-
-        PackageManager pm = FakeContext.get().getPackageManager();
-        for (ApplicationInfo appInfo : getLaunchableApps(pm)) {
-            String name = pm.getApplicationLabel(appInfo).toString();
-            if (name.toLowerCase(Locale.getDefault()).startsWith(searchName)) {
-                boolean system = (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
-                result.add(new DeviceApp(appInfo.packageName, name, system));
-            }
-        }
-
-        return result;
-    }
-
-    public static void startApp(String packageName, int displayId, boolean forceStop) {
-        PackageManager pm = FakeContext.get().getPackageManager();
-
-        Intent launchIntent = getLaunchIntent(pm, packageName);
-        if (launchIntent == null) {
-            Ln.w("Cannot create launch intent for app " + packageName);
-            return;
-        }
-
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-
+    public static void startApp(Intent launchIntent, int displayId, boolean forceStop) {
         Bundle options = null;
         if (Build.VERSION.SDK_INT >= AndroidVersions.API_26_ANDROID_8_0) {
             ActivityOptions launchOptions = ActivityOptions.makeBasic();
@@ -308,8 +231,25 @@ public final class Device {
 
         ActivityManager am = ServiceManager.getActivityManager();
         if (forceStop) {
-            am.forceStopPackage(packageName);
+            am.forceStopPackage(launchIntent.getComponent().getPackageName());
         }
         am.startActivity(launchIntent, options);
+    }
+
+    @SuppressLint("QueryPermissionsNeeded")
+    public static List<ApplicationInfo> getInstalledApps() {
+        Context context = FakeContext.get();
+        PackageManager pm = context.getPackageManager();
+        List<ApplicationInfo> list = pm.getInstalledApplications(PackageManager.GET_META_DATA);
+        List<ApplicationInfo> launchable = new ArrayList<>();
+        int uiModeType = IntentQuery.getCurrentModeType(context);
+
+        for (ApplicationInfo appInfo : list) {
+            Intent launchIntent = IntentQuery.getLaunchIntentForUIModeType(appInfo.packageName, uiModeType, pm);
+            if (launchIntent != null) {
+                launchable.add(appInfo);
+            }
+        }
+        return launchable;
     }
 }

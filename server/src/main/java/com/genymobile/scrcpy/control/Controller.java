@@ -15,6 +15,7 @@ import com.genymobile.scrcpy.wrappers.ClipboardManager;
 import com.genymobile.scrcpy.wrappers.InputManager;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
 
+import android.content.ComponentName;
 import android.content.IOnPrimaryClipChangedListener;
 import android.content.Intent;
 import android.content.pm.ResolveInfo;
@@ -609,13 +610,29 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private void startApp(String name) {
-        List<ResolveInfo> drawerApps = Device.getDrawerApps();
-        Intent launchIntent;
+        int startAppDisplayId = getStartAppDisplayId();
+        if (startAppDisplayId == Device.DISPLAY_ID_NONE) {
+            Ln.e("No known display id to start app \"" + name + "\"");
+            return;
+        }
 
         boolean forceStopBeforeStart = name.startsWith("+");
         if (forceStopBeforeStart) {
             name = name.substring(1);
         }
+
+        if (name.contains("/")){
+            Intent launchIntent = new Intent();
+            ComponentName component = new ComponentName(name.split("/")[0], name.split("/")[1]);
+            launchIntent.setComponent(component);
+
+            Ln.i("Starting activity: " + name);
+            Device.startApp(launchIntent, startAppDisplayId, forceStopBeforeStart);
+            return;
+        }
+
+        List<ResolveInfo> drawerApps = Device.getDrawerApps();
+        Intent launchIntent;
 
         boolean searchByName = name.startsWith("?");
         if (searchByName) {
@@ -631,12 +648,6 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
                 Ln.w("No app found for package: " + name);
                 return;
             }
-        }
-
-        int startAppDisplayId = getStartAppDisplayId();
-        if (startAppDisplayId == Device.DISPLAY_ID_NONE) {
-            Ln.e("No known display id to start app \"" + name + "\"");
-            return;
         }
 
         String packageName = launchIntent.getComponent().getPackageName();

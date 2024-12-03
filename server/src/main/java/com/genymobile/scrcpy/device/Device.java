@@ -298,7 +298,7 @@ public final class Device {
             Ln.w("Trying to find from list of all apps");
             return getIntentFromListOfAllApps(orgQuery,isPackageName);
         }
-        else if (launchIntent.getBooleanExtra("MULTIPLE_EXACT_LABELS", true)) {
+        else if (launchIntent.getBooleanExtra("MULTIPLE_EXACT_LABELS", false)) {
             //Let processResolvedLists() return a "garbage" intent if there are multiple exact labels.
             // We want to avoid redundant check. This happens if first check "launchIntent == null"
             // becomes true since getIntentFromListOfAllApps() also calls processResolvedLists().

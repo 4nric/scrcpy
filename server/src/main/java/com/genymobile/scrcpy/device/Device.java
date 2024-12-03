@@ -18,6 +18,8 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.app.ActivityOptions;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
@@ -244,8 +246,7 @@ public final class Device {
     @SuppressLint("QueryPermissionsNeeded")
     public static List<ResolveInfo> getDrawerApps() {
         Context context = FakeContext.get();
-        PackageManager packageManager = context.getPackageManager();
-
+        PackageManager pm = context.getPackageManager();
         Intent intent = new Intent(Intent.ACTION_MAIN, null);
 
         UiModeManager uiModeManager = (UiModeManager) context.getSystemService(Context.UI_MODE_SERVICE);
@@ -254,66 +255,154 @@ public final class Device {
         } else {
             intent.addCategory(Intent.CATEGORY_LAUNCHER);
         }
-        return packageManager.queryIntentActivities(intent, 0);
+        return pm.queryIntentActivities(intent, 0);
     }
 
-    public static Intent getAppWithUniqueLabel(List<ResolveInfo> drawerApps, String label){
-        String errorMessage = "No unique app found named \"" + label + "\"\n";
+    public static Intent getIntentFromAppDrawer(String query, boolean isPackageName){
+        String errorMessage = isPackageName ?
+                "No launchable app with package name \"" + query + "\" found from app drawer" :
+                "No unique launchable app named \"" + query + "\" found from app drawer";
+        String orgQuery = query;
+        query = query.toLowerCase(Locale.getDefault());
+
+        List<ResolveInfo> exactMatchesLabel = new ArrayList<>();
+        List<ResolveInfo> potentialMatchesAppName = new ArrayList<>();
+        List<ResolveInfo> potentialMatchesPkgName = new ArrayList<>();
         Context context = FakeContext.get();
-        label = label.toLowerCase(Locale.getDefault());
+        PackageManager pm = context.getPackageManager();
 
-        List<ResolveInfo> exactMatches = new ArrayList<>();
-        List<ResolveInfo> potentialMatches = new ArrayList<>();
+        for (ResolveInfo drawerApp : getDrawerApps()) {
+            String packageName = drawerApp.activityInfo.packageName;
+            String label = drawerApp.loadLabel(pm).toString().toLowerCase(Locale.getDefault());
 
-        for (ResolveInfo drawerApp : drawerApps) {
-            String appName = drawerApp.loadLabel(context.getPackageManager()).toString();
-            if (appName.toLowerCase(Locale.getDefault()).equals(label)){
-                exactMatches.add(drawerApp);
-            }else if (appName.toLowerCase(Locale.getDefault())
-                    .contains(label.toLowerCase(Locale.getDefault()))) {
-                potentialMatches.add(drawerApp);
+            if (isPackageName){
+                if (packageName.equals(query)) {
+                    ComponentName componentName = new ComponentName(packageName, drawerApp.activityInfo.name);
+                    return new Intent().setComponent(componentName)
+                            .putExtra("APP_LABEL", drawerApp.loadLabel(pm).toString());
+                } else if (packageName.contains(query)){
+                    potentialMatchesPkgName.add(drawerApp);
+                }
+            } else {
+                if (label.equals(query)) {
+                    exactMatchesLabel.add(drawerApp);
+                } else if (label.contains(query)){
+                    potentialMatchesAppName.add(drawerApp);
+                }
             }
         }
 
-        if (exactMatches.size() == 1){
-            ComponentName componentName = new ComponentName(exactMatches.get(0).activityInfo.packageName, exactMatches.get(0).activityInfo.name);
-            return new Intent().setComponent(componentName)
-                    .putExtra("APP_LABEL", exactMatches.get(0).loadLabel(context.getPackageManager()).toString());
-        } else{
-            String suggestions = "";
+        Intent launchIntent = processResolvedLists(pm,isPackageName,false,errorMessage,exactMatchesLabel,potentialMatchesAppName,potentialMatchesPkgName);
 
-            if (!exactMatches.isEmpty()){
-                suggestions+=LogUtils.buildAppListMessage("Found "+exactMatches.size()+" exact matches:",exactMatches)+"\n";
-            }
-            if (!potentialMatches.isEmpty()){
-                suggestions+=LogUtils.buildAppListMessage("Found " + potentialMatches.size() + " potential " + (potentialMatches.size() == 1 ? "match:" : "matches:"), potentialMatches)+"\n";
-            }
-
-            if (!suggestions.isEmpty()){
-                Ln.e(errorMessage+suggestions);
-            }
+        if (launchIntent == null){
+            Ln.w("Trying to find from list of all apps");
+            return getIntentFromListOfAllApps(orgQuery,isPackageName);
+        }
+        else if (launchIntent.getBooleanExtra("MULTIPLE_EXACT_LABELS", true)) {
+            //Let processResolvedLists() return a "garbage" intent if there are multiple exact labels.
+            // We want to avoid redundant check. This happens if first check "launchIntent == null"
+            // becomes true since getIntentFromListOfAllApps() also calls processResolvedLists().
+            // This limitation can be removed
             return null;
         }
+        return launchIntent;
     }
 
-    public static Intent getAppGivenPackageName(List<ResolveInfo> drawerApps, String packageName){
-        packageName = packageName.toLowerCase(Locale.getDefault());
-        String errorMessage = "No app found with package name \"" + packageName + "\"\n";
-        List<ResolveInfo> potentialMatches = new ArrayList<>();
-        for (ResolveInfo drawerApp : drawerApps) {
-            if (drawerApp.activityInfo.packageName.equals(packageName)){
-                ComponentName componentName = new ComponentName(drawerApp.activityInfo.packageName, drawerApp.activityInfo.name);
-                return new Intent().setComponent(componentName);
-            } else if (drawerApp.activityInfo.packageName
-                    .contains(packageName)) {
-                potentialMatches.add(drawerApp);
+    @SuppressLint("QueryPermissionsNeeded")
+    public static Intent getIntentFromListOfAllApps(String query, boolean isPackageName){
+        String errorMessage = isPackageName ?
+                "No launchable app with package name \"" + query + "\" found from list of all apps" :
+                "No unique launchable app named \"" + query + "\" found from list of all apps";
+        query = query.toLowerCase(Locale.getDefault());
+
+        List<ResolveInfo> exactMatchesLabel = new ArrayList<>();
+        List<ResolveInfo> potentialMatchesAppName = new ArrayList<>();
+        List<ResolveInfo> potentialMatchesPkgName = new ArrayList<>();
+        Context context = FakeContext.get();
+        PackageManager pm = context.getPackageManager();
+        ResolveInfo resolveInfo;
+
+        boolean isTV = false;
+        UiModeManager uiModeManager = (UiModeManager) context.getSystemService(Context.UI_MODE_SERVICE);
+        if (uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
+            isTV = true;
+        }
+
+        for (ApplicationInfo appInfo : pm.getInstalledApplications(PackageManager.GET_META_DATA)) {
+            String packageName = appInfo.packageName;
+            String label = appInfo.loadLabel(pm).toString().toLowerCase(Locale.getDefault());
+            Intent launchIntent = isTV ?
+                    pm.getLeanbackLaunchIntentForPackage(packageName) :
+                    pm.getLaunchIntentForPackage(packageName);
+
+            if (isPackageName){
+                if (packageName.equals(query) && launchIntent == null) {
+                    Ln.e("No launch intent for " + appInfo.loadLabel(pm) + " ["+packageName+"]");
+                    return null;
+                } else if (packageName.equals(query)) {
+                    return launchIntent.putExtra("APP_LABEL", label);
+                }else if (packageName.contains(query) && launchIntent != null){
+                    resolveInfo = pm.resolveActivity(launchIntent, 0);
+                    potentialMatchesPkgName.add(resolveInfo);
+                }
+            } else {
+                if (launchIntent == null) {
+                    if (label.equals(query)){
+                        Ln.w("Ignoring "+ appInfo.loadLabel(pm) + " ["+packageName+"] which has no launch intent");
+                    }
+                    continue;
+                }
+                resolveInfo = pm.resolveActivity(launchIntent, 0);
+                if (label.equals(query)) {
+                    exactMatchesLabel.add(resolveInfo);
+                } else if (label.contains(query)){
+                    potentialMatchesAppName.add(resolveInfo);
+                }
             }
         }
-        if (!potentialMatches.isEmpty()){
-            Ln.e(errorMessage+LogUtils.buildAppListMessage("Found " + potentialMatches.size() + " potential " + (potentialMatches.size() == 1 ? "match:" : "matches:"), potentialMatches));
+
+        return processResolvedLists(pm,isPackageName,true,errorMessage,exactMatchesLabel,potentialMatchesAppName,potentialMatchesPkgName);
+    }
+
+    private static Intent processResolvedLists(PackageManager pm, boolean isPackageName, boolean showSuggestions, String errorMessage,
+                                               List<ResolveInfo> exactMatchesLabel,
+                                               List<ResolveInfo> potentialMatchesAppName,
+                                               List<ResolveInfo> potentialMatchesPkgName){
+        String suggestions = "\n";
+        boolean multipleExactLabelMatches = false;
+        if (isPackageName){
+            if (!potentialMatchesPkgName.isEmpty()){
+                suggestions+=LogUtils.buildAppListMessage("Found "+potentialMatchesPkgName.size()+" potential matches:",potentialMatchesPkgName);
+            }
+        } else {
+            if (exactMatchesLabel.size() == 1){
+                ActivityInfo activityInfo = exactMatchesLabel.get(0).activityInfo;
+                ComponentName componentName = new ComponentName(activityInfo.packageName, activityInfo.name);
+                return new Intent().setComponent(componentName)
+                        .putExtra("APP_LABEL", exactMatchesLabel.get(0).loadLabel(pm).toString());
+            } else{
+                if (!exactMatchesLabel.isEmpty()){
+                    multipleExactLabelMatches = true;
+                    showSuggestions = true;
+                    suggestions+=LogUtils.buildAppListMessage("Found "+exactMatchesLabel.size()+" exact matches:",exactMatchesLabel)+"\n";
+                }
+                if (!potentialMatchesAppName.isEmpty()){
+                    suggestions+=LogUtils.buildAppListMessage("Found " + potentialMatchesAppName.size() + " other potential " + (potentialMatchesAppName.size() == 1 ? "match:" : "matches:"), potentialMatchesAppName)+"\n";
+                }
+            }
+        }
+
+        if (showSuggestions){
+            Ln.e(errorMessage + (suggestions.equals("\n")? "\0" : suggestions));
         } else {
             Ln.e(errorMessage);
         }
-        return null;
+        if (multipleExactLabelMatches){
+            return new Intent().putExtra("MULTIPLE_EXACT_LABELS", true);
+        } else {
+            return null;
+        }
     }
 }
+
+

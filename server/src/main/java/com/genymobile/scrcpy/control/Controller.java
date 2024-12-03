@@ -18,7 +18,6 @@ import com.genymobile.scrcpy.wrappers.ServiceManager;
 import android.content.ComponentName;
 import android.content.IOnPrimaryClipChangedListener;
 import android.content.Intent;
-import android.content.pm.ResolveInfo;
 import android.os.Build;
 import android.os.SystemClock;
 import android.view.InputDevice;
@@ -27,7 +26,6 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -639,19 +637,17 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
             Ln.i("Starting activity: " + name);
         } else {
-            List<ResolveInfo> drawerApps = Device.getDrawerApps();
-
             boolean searchByName = name.startsWith("?") || name.contains(" ");
             if (searchByName) {
                 if (name.contains("?")) {
                     name = name.substring(1);
                 }
-                launchIntent = Device.getAppWithUniqueLabel(drawerApps,name);
+                launchIntent = Device.getIntentFromAppDrawer(name,false);
                 if (launchIntent == null){
                     return;
                 }
             } else {
-                launchIntent = Device.getAppGivenPackageName(drawerApps,name);
+                launchIntent = Device.getIntentFromAppDrawer(name,true);
                 if (launchIntent == null) {
                     return;
                 }
